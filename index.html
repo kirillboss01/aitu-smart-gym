@@ -76,6 +76,16 @@ function go(s){
   ({find:showFind, mine:showMine, stats:showStats, admin:showAdmin})[s]();
 }
 async function run(promise){ const r = await promise; if (r.error) throw new Error(r.error.message); return r.data; }
+async function runLogged(action, sql, promise){
+  try{
+    const data = await run(promise);
+    log(action, sql, data.length + ' row(s)');
+    return data;
+  }catch(e){
+    log(action, sql, 'ERROR: ' + e.message);
+    throw e;
+  }
+}
 
 // ---------- Screen 1: Login ----------
 function showLogin(msg){
@@ -89,21 +99,32 @@ function showLogin(msg){
 async function doLogin(){
   const email = document.getElementById('em').value.trim().toLowerCase();
   if (!email) return showLogin(banner('err','Please enter your e-mail.'));
+  const action = 'Auth: Send sign-in link';
+  const request = 'POST /auth/v1/otp (email and redirect URL redacted)';
+  log(action, request, 'Sending request...');
   try{
     const {error} = await sb.auth.signInWithOtp({email, options:{emailRedirectTo:window.location.href.split('#')[0]}});
     if (error) throw error;
+    log(action, request, 'Request accepted; check the inbox.');
     showLogin(banner('ok','Check your e-mail for the secure sign-in link.'));
-  }catch(e){ showLogin(banner('err','Sign-in error: ' + e.message)); }
+  }catch(e){
+    log(action, request, 'ERROR: ' + e.message);
+    showLogin(banner('err','Sign-in error: ' + e.message));
+  }
 }
 async function loadUser(session){
   const email = session.user.email.toLowerCase();
-  const students = await run(sb.from('student').select('student_id,name,surname').eq('email', email).eq('account_status','active').limit(1));
+  const students = await runLogged('Auth: Find active student profile',
+    "SELECT student_id, name, surname FROM student WHERE email = [authenticated user] AND account_status = 'active' LIMIT 1;",
+    sb.from('student').select('student_id,name,surname').eq('email', email).eq('account_status','active').limit(1));
   if (students.length){
     const s = students[0];
     user = {role:'student', id:s.student_id, name:s.name+' '+(s.surname||'')};
     return showFind(banner('ok','Welcome, ' + s.name + '!'));
   }
-  const staff = await run(sb.from('staff').select('staff_id,full_name,role').eq('email', email).eq('account_status','active').limit(1));
+  const staff = await runLogged('Auth: Find active staff profile',
+    "SELECT staff_id, full_name, role FROM staff WHERE email = [authenticated user] AND account_status = 'active' LIMIT 1;",
+    sb.from('staff').select('staff_id,full_name,role').eq('email', email).eq('account_status','active').limit(1));
   if (staff.length){
     user = {role:'staff', id:staff[0].staff_id, name:staff[0].full_name};
     return showAdmin(banner('ok','Welcome, ' + staff[0].full_name + '!'));
@@ -123,7 +144,11 @@ async function doLogout(){
 async function showFind(msg){
   setNav('find');
   let zones = [];
-  try{ zones = await run(sb.from('gym_zone').select('zone_id,zone_name').order('zone_id')); }catch(e){ msg = (msg||'') + banner('err','Database error: ' + e.message); }
+  try{
+    zones = await runLogged('Screen: Load gym zones',
+      'SELECT zone_id, zone_name FROM gym_zone ORDER BY zone_id;',
+      sb.from('gym_zone').select('zone_id,zone_name').order('zone_id'));
+  }catch(e){ msg = (msg||'') + banner('err','Database error: ' + e.message); }
   const times = []; for (let m=8*60; m<=21*60+30; m+=30) times.push(pad(Math.floor(m/60))+':'+pad(m%60));
   app.innerHTML = '<div class="card"><h2>Find equipment</h2>' + (msg||'') +
    '<div class="row">' +
